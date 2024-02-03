@@ -1,4 +1,7 @@
+__pycache__*
+
+twitter_creds.py
+
 secrets.json
 token.json
-twitter_creds.py
 latest_videos.json
