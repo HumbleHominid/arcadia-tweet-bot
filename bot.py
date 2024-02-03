@@ -10,6 +10,7 @@ import google_auth_oauthlib.flow
 import google.oauth2
 import google.auth.transport.requests
 import tweepy
+import flask
 
 # Twitter API credentials
 from twitter_creds import *
@@ -18,7 +19,7 @@ from twitter_creds import *
 from arcadia_members import ARCADIA_MEMBERS
 
 # YouTube API setup
-SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
 SECRETS_FILE = "secrets.json"
@@ -48,6 +49,32 @@ def authenticate_youtube():
 
     return googleapiclient.discovery.build(API_SERVICE_NAME, API_VERSION, credentials=creds)
 
+def check_subscription(api, channel_id):
+    request = api.subscriptions().list(
+        part="snippet,contentDetails",
+        forChannelId=channel_id,
+        mine=True
+    )
+    return request.execute()
+
+# Subscribe to notifications for certain channels
+def subscribe_to_youtube_notifications(api, channel_id):
+    request = api.subscriptions().insert(
+        part="snippet",
+        body={
+            "snippet": {
+                "resourceId": {
+                    "kind": "youtube#channel",
+                    "channelId": channel_id
+                },
+                "types": ["video"]
+            }
+        }
+    )
+
+    response = request.execute()
+    return response
+
 # Gets the latest video for a specific channel
 def get_latest_video(api, channel_id):
     request = api.search().list(
@@ -67,7 +94,7 @@ def load_latest_videos():
         with (open(LATEST_VIDEOS_FILE, 'r') as videos_file):
             try:
                 latest_vids = json.load(videos_file)
-            except: None
+            except: pass
 
     return latest_vids
 
@@ -93,33 +120,47 @@ def post_tweet(client, video_title, video_id, member_twitter_handle=None):
         try:
             client.create_tweet(text=tweet_text)
             print(f"Sent Tweet: \"{tweet_text}\"")
-        except: None
+        except: pass
     else:
         print(f"Demo Tweet: \"{tweet_text}\"")
 
 def main():
     youtube_api = authenticate_youtube()
-    twitter_client = create_twitter_client()
+    # twitter_client = create_twitter_client()
     latest_vids = load_latest_videos()
 
+    # Check if we need to subscribe to any Arcadians
     for arcadia_member in ARCADIA_MEMBERS:
-        channel_id = arcadia_member[0]
-        response = get_latest_video(youtube_api, channel_id)
+        response = check_subscription(youtube_api, arcadia_member[0])
 
-        if response['items']:
-            video_id = response['items'][0]['id']['videoId']
+        # Subscribe to Arcadians if we need to
+        if not response['items']:
+            response = subscribe_to_youtube_notifications(youtube_api, arcadia_member[0])
 
-            # Only post tweet if it's a new video we don't know about
-            if not channel_id in latest_vids or latest_vids[channel_id] != video_id:
-                video_title = response['items'][0]['snippet']['title']
-                latest_vids[channel_id] = video_id
+            if response:
+                print(f"Added subscription to {response['snippet']['title']}!")
+        else:
+                print(f"Already subscribed to {response['items'][0]['snippet']['title']}!")
 
-                # Send tweet
-                post_tweet(twitter_client, video_title, video_id, arcadia_member[1])
+    # Check for latest videos the first time we start up in case we missed something
+    # for arcadia_member in ARCADIA_MEMBERS:
+    #     channel_id = arcadia_member[0]
+    #     response = get_latest_video(youtube_api, channel_id)
 
-    # Write the latest videos to a file for reading in later
-    with (open(LATEST_VIDEOS_FILE, 'w') as videos_file):
-        json.dump(latest_vids, videos_file)
+    #     if response['items']:
+    #         video_id = response['items'][0]['id']['videoId']
+
+    #         # Only post tweet if it's a new video we don't know about
+    #         if not channel_id in latest_vids or latest_vids[channel_id] != video_id:
+    #             video_title = response['items'][0]['snippet']['title']
+    #             latest_vids[channel_id] = video_id
+
+    #             # Send tweet
+    #             post_tweet(twitter_client, video_title, video_id, arcadia_member[1])
+
+    # # Write the latest videos to a file for reading in later
+    # with (open(LATEST_VIDEOS_FILE, 'w') as videos_file):
+    #     json.dump(latest_vids, videos_file)
 
 if __name__ == "__main__":
     main()
