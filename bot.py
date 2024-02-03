@@ -14,17 +14,15 @@ import tweepy
 # Twitter API credentials
 from twitter_creds import *
 
+# Arcadia members info
+from arcadia_members import ARCADIA_MEMBERS
+
 # YouTube API setup
 SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
 SECRETS_FILE = "secrets.json"
 TOKEN_FILE = "token.json"
-
-# List of members YouTube channels and twitter IDs
-ARCADIA_MEMBERS = [
-    # [YouTube Channel ID, Twitter Handle]
-]
 
 # Cached latest videos
 LATEST_VIDEOS_FILE = "latest_videos.json"
