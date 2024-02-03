@@ -45,6 +45,17 @@ def authenticate_youtube():
 
     return googleapiclient.discovery.build(API_SERVICE_NAME, API_VERSION, credentials=creds)
 
+# Gets the latest video for a specific channel
+def get_latest_video(api, channel_id):
+    request = api.search().list(
+        part ="snippet",
+        channelId=channel_id,
+        order="date",
+        type="video",
+        maxResults=1
+    )
+    return request.execute()
+
 # Loads the latest videos members have posted from the saved video file into memory
 def load_latest_videos():
     latest_vids = {}
@@ -87,14 +98,7 @@ def main():
 
     for arcadia_member in ARCADIA_MEMBERS:
         channel_id = arcadia_member[0]
-        request = youtube_api.search().list(
-            part ="snippet",
-            channelId=channel_id,
-            order="date",
-            type="video",
-            maxResults=1
-        )
-        response = request.execute()
+        response = get_latest_video(youtube_api, channel_id)
 
         if response['items']:
             video_id = response['items'][0]['id']['videoId']
