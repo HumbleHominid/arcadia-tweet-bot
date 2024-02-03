@@ -79,6 +79,7 @@ def post_tweet(client, video_title, video_id, member_twitter_handle=None):
 
     try:
         client.create_tweet(text=tweet_text)
+        print(f"Sent Tweet: \"{tweet_text}\"")
     except: None
 
 def main():
