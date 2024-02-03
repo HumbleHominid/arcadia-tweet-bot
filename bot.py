@@ -27,6 +27,9 @@ TOKEN_FILE = "token.json"
 # Cached latest videos
 LATEST_VIDEOS_FILE = "latest_videos.json"
 
+# If tweets should be posted
+SHOULD_POST_TWEET = True
+
 # Authenticates YouTube and returns an api object
 def authenticate_youtube():
     creds = None
@@ -86,10 +89,13 @@ def post_tweet(client, video_title, video_id, member_twitter_handle=None):
     if member_twitter_handle:
         tweet_text += f" @{member_twitter_handle}"
 
-    try:
-        client.create_tweet(text=tweet_text)
-        print(f"Sent Tweet: \"{tweet_text}\"")
-    except: None
+    if SHOULD_POST_TWEET:
+        try:
+            client.create_tweet(text=tweet_text)
+            print(f"Sent Tweet: \"{tweet_text}\"")
+        except: None
+    else:
+        print(f"Demo Tweet: \"{tweet_text}\"")
 
 def main():
     youtube_api = authenticate_youtube()
