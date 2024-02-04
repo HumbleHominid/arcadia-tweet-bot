@@ -3,6 +3,4 @@ __pycache__*
 twitter_creds.py
 arcadia_members.py
 
-secrets.json
-token.json
 latest_videos.json
