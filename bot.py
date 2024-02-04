@@ -31,6 +31,9 @@ TOKEN_FILE = "token.json"
 # Cached latest videos
 LATEST_VIDEOS_FILE = "latest_videos.json"
 
+# Ignore short for twitter
+SHOULD_INCLUDE_SHORTS = False
+
 # If tweets should be posted
 SHOULD_POST_TWEET = False
 
@@ -128,20 +131,23 @@ def main():
                 # Only post tweet if it's a new video we don't know about
                 if channel_id in latest_vids and latest_vids[channel_id] == video_id: break
 
-                # No way to query if a video is a short so we have to just guess it's a short if it's less than 60s. Which is probably true for our content anyways
-                video = get_video(youtube_api, video_id)
-                duration_iso = video['items'][0]['contentDetails']['duration']
-                duration_seconds = isodate.parse_duration(duration_iso).seconds
+                # This is a flag 1) to make it easier to turn off but 2) because this hits the youtube api through oauth whereas the xml request does not
+                if not SHOULD_INCLUDE_SHORTS:
+                    # No way to query if a video is a short so we have to just guess it's a short if it's less than 60s. Which is probably true for our content anyways
+                    video = get_video(youtube_api, video_id)
+                    duration_iso = video['items'][0]['contentDetails']['duration']
+                    duration_seconds = isodate.parse_duration(duration_iso).seconds
 
-                if duration_seconds > 60:
-                    video_title = video['items'][0]['snippet']['title']
-                    # Send tweet
-                    success = post_tweet(twitter_client, video_title, video_id, arcadia_member[1])
+                    if duration_seconds <= 60: continue
 
-                    # Only update list if the twitter post succeeds
-                    if success: latest_vids[channel_id] = video_id
+                video_title = entry.find(".//{http://www.w3.org/2005/Atom}title").text
+                # Send tweet
+                success = post_tweet(twitter_client, video_title, video_id, arcadia_member[1])
 
-                    break
+                # Only update list if the twitter post succeeds
+                if success: latest_vids[channel_id] = video_id
+
+                break
 
             # if we get through all the entries either the whole list is shorts, or the final video is the most recent one. we can just update to the most recent one to avoid further api requests
             last_video_entry = entries[-1].find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
