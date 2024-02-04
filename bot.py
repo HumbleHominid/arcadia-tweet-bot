@@ -13,7 +13,6 @@ import tweepy
 import requests
 import xml.etree.ElementTree as ET
 import isodate
-import time
 
 # Twitter API credentials
 from twitter_creds import *
