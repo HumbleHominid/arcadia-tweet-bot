@@ -32,7 +32,7 @@ TOKEN_FILE = "token.json"
 LATEST_VIDEOS_FILE = "latest_videos.json"
 
 # Ignore short for twitter
-SHOULD_INCLUDE_SHORTS = False
+SHOULD_EXCLUDE_SHORTS = True
 
 # If tweets should be posted
 SHOULD_POST_TWEET = False
@@ -108,7 +108,7 @@ def main():
     latest_vids = load_latest_videos()
 
     while True:
-        youtube_api = authenticate_youtube()
+        if SHOULD_EXCLUDE_SHORTS: youtube_api = authenticate_youtube()
         twitter_client = create_twitter_client()
 
         print(f"Polling for new videos...")
@@ -132,7 +132,7 @@ def main():
                 if channel_id in latest_vids and latest_vids[channel_id] == video_id: break
 
                 # This is a flag 1) to make it easier to turn off but 2) because this hits the youtube api through oauth whereas the xml request does not
-                if not SHOULD_INCLUDE_SHORTS:
+                if SHOULD_EXCLUDE_SHORTS:
                     # No way to query if a video is a short so we have to just guess it's a short if it's less than 60s. Which is probably true for our content anyways
                     video = get_video(youtube_api, video_id)
                     duration_iso = video['items'][0]['contentDetails']['duration']
