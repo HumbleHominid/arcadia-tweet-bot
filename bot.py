@@ -110,64 +110,58 @@ def post_tweet(client, video_title, video_id, member_twitter_handle=None):
 
 def main():
     latest_vids = load_latest_videos()
+    twitter_client = create_twitter_client()
+    if SHOULD_EXCLUDE_SHORTS: youtube_api = authenticate_youtube()
 
-    while True:
-        if SHOULD_EXCLUDE_SHORTS: youtube_api = authenticate_youtube()
-        twitter_client = create_twitter_client()
+    print(f"Polling for new videos...")
+    # Check members for new videos
+    for arcadia_member in ARCADIA_MEMBERS:
+        channel_id = arcadia_member[0]
 
-        print(f"Polling for new videos...")
-        # Check members for new videos
-        for arcadia_member in ARCADIA_MEMBERS:
-            channel_id = arcadia_member[0]
+        # Request the xml for a channel. Only grabs the 10 most recent but they are ordered so it's perfect
+        request = requests.get(f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")
 
-            # Request the xml for a channel. Only grabs the 10 most recent but they are ordered so it's perfect
-            request = requests.get(f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")
+        if request.status_code != requests.codes.ok: continue
 
-            if request.status_code != requests.codes.ok: continue
+        # This response is XML so we gotta to annoying things
+        root = ET.fromstring(request.text)
+        entries = root.findall(".//{http://www.w3.org/2005/Atom}entry")
 
-            # This response is XML so we gotta to annoying things
-            root = ET.fromstring(request.text)
-            entries = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+        for entry in entries:
+            video_id = entry.find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
 
-            for entry in entries:
-                video_id = entry.find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
+            # Only post tweet if it's a new video we don't know about
+            if channel_id in latest_vids and latest_vids[channel_id] == video_id: break
 
-                # Only post tweet if it's a new video we don't know about
-                if channel_id in latest_vids and latest_vids[channel_id] == video_id: break
+            # This is a flag 1) to make it easier to turn off but 2) because this hits the youtube api through oauth whereas the xml request does not
+            if SHOULD_EXCLUDE_SHORTS & youtube_api:
+                # No way to query if a video is a short so we have to just guess it's a short if it's less than 60s. Which is probably true for our content anyways
+                video = get_video(youtube_api, video_id)
+                duration_iso = video['items'][0]['contentDetails']['duration']
+                duration_seconds = isodate.parse_duration(duration_iso).seconds
 
-                # This is a flag 1) to make it easier to turn off but 2) because this hits the youtube api through oauth whereas the xml request does not
-                if SHOULD_EXCLUDE_SHORTS & youtube_api:
-                    # No way to query if a video is a short so we have to just guess it's a short if it's less than 60s. Which is probably true for our content anyways
-                    video = get_video(youtube_api, video_id)
-                    duration_iso = video['items'][0]['contentDetails']['duration']
-                    duration_seconds = isodate.parse_duration(duration_iso).seconds
+                if duration_seconds <= 60: continue
 
-                    if duration_seconds <= 60: continue
+            video_title = entry.find(".//{http://www.w3.org/2005/Atom}title").text
+            # Send tweet
+            success = post_tweet(twitter_client, video_title, video_id, arcadia_member[1])
 
-                video_title = entry.find(".//{http://www.w3.org/2005/Atom}title").text
-                # Send tweet
-                success = post_tweet(twitter_client, video_title, video_id, arcadia_member[1])
+            # Only update list if the twitter post succeeds
+            if success: latest_vids[channel_id] = video_id
 
-                # Only update list if the twitter post succeeds
-                if success: latest_vids[channel_id] = video_id
+            break
 
-                break
+        # if we get through all the entries either the whole list is shorts, or the final video is the most recent one. we can just update to the most recent one to avoid further api requests
+        last_video_entry = entries[-1].find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
+        if not channel_id in latest_vids or latest_vids[channel_id] == last_video_entry:
+            first_video_entry = entries[0].find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
+            latest_vids[channel_id] = first_video_entry
 
-            # if we get through all the entries either the whole list is shorts, or the final video is the most recent one. we can just update to the most recent one to avoid further api requests
-            last_video_entry = entries[-1].find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
-            if not channel_id in latest_vids or latest_vids[channel_id] == last_video_entry:
-                first_video_entry = entries[0].find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
-                latest_vids[channel_id] = first_video_entry
-
-        print(f"Polling Ended")
-        # Write the latest videos to a file for reading in later
-        with (open(LATEST_VIDEOS_FILE, 'w') as videos_file):
-            json.dump(latest_vids, videos_file)
-            print(f"{LATEST_VIDEOS_FILE} written")
-
-        # Sleep for x minutes
-        # TODO cron job
-        time.sleep(60*1)
+    print(f"Polling Ended")
+    # Write the latest videos to a file for reading in later
+    with (open(LATEST_VIDEOS_FILE, 'w') as videos_file):
+        json.dump(latest_vids, videos_file)
+        print(f"{LATEST_VIDEOS_FILE} written")
 
 if __name__ == "__main__":
     main()
