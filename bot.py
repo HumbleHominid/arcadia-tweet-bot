@@ -22,7 +22,7 @@ from twitter_creds import *
 from arcadia_members import ARCADIA_MEMBERS
 
 # YouTube API setup
-SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
+SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
 SECRETS_FILE = "secrets.json"
@@ -47,8 +47,12 @@ def authenticate_youtube():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(google.auth.transport.requests.Request())
         else:
-            flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(SECRETS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
+            try:
+                flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(SECRETS_FILE, SCOPES)
+                creds = flow.run_local_server(port=0)
+            except:
+                print("Google auth flow failed.")
+                return None
 
         with open(TOKEN_FILE, 'w') as token_file:
             token_file.write(creds.to_json())
@@ -132,7 +136,7 @@ def main():
                 if channel_id in latest_vids and latest_vids[channel_id] == video_id: break
 
                 # This is a flag 1) to make it easier to turn off but 2) because this hits the youtube api through oauth whereas the xml request does not
-                if SHOULD_EXCLUDE_SHORTS:
+                if SHOULD_EXCLUDE_SHORTS & youtube_api:
                     # No way to query if a video is a short so we have to just guess it's a short if it's less than 60s. Which is probably true for our content anyways
                     video = get_video(youtube_api, video_id)
                     duration_iso = video['items'][0]['contentDetails']['duration']
