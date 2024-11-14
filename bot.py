@@ -6,10 +6,8 @@
 # ---------------------
 import os
 import json
+from google.oauth2 import service_account
 import googleapiclient.discovery
-import google_auth_oauthlib.flow
-import google.oauth2
-import google.auth.transport.requests
 import tweepy
 import requests
 import xml.etree.ElementTree as ET
@@ -31,8 +29,7 @@ TOKEN_TEST = True
 SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
-SECRETS_FILE = os.path.join(DIR_PATH, "secrets.json")
-TOKEN_FILE = os.path.join(DIR_PATH, "token.json")
+SERVICE_ACCOUNT_FILE = os.path.join(DIR_PATH, "service_account.json")
 
 # Cached latest videos
 LATEST_VIDEOS_FILE = os.path.join(DIR_PATH, "latest_videos.json")
@@ -51,33 +48,14 @@ def append_log(text):
     with open(LOG_FILE, 'a') as log_file:
         log_file.write(f"{text}\n")
 
-# Write creds to file
-def write_creds(creds, file_name = TOKEN_FILE):
-    with open(file_name, 'w') as token_file:
-        token_file.write(creds.to_json())
-        append_log("Wrote creds to token file")
-
 # Authenticates YouTube and returns an api object
 def authenticate_youtube():
-    creds = None
-    if os.path.exists(TOKEN_FILE):
-        creds = google.oauth2.credentials.Credentials.from_authorized_user_file(TOKEN_FILE)
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(google.auth.transport.requests.Request())
-        else:
-            try:
-                flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(SECRETS_FILE, SCOPES)
-                creds = flow.run_local_server(port=0)
-            except:
-                print("Google auth flow failed.")
-                return None
-
-        with open(TOKEN_FILE, 'w') as token_file:
-            token_file.write(creds.to_json())
-
-    return googleapiclient.discovery.build(API_SERVICE_NAME, API_VERSION, credentials=creds)
+    # Use a service account for authentication
+    creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    if creds:
+        return googleapiclient.discovery.build(API_SERVICE_NAME, API_VERSION, credentials=creds)
+    else:
+        return None
 
 # Gets the latest video for a specific channel
 def get_video(api, video_id):

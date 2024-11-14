@@ -1,4 +1,5 @@
 __pycache__*
+arcadia_bot*
 
 twitter_creds.py
 arcadia_members.py
@@ -6,3 +7,6 @@ arcadia_members.py
 latest_videos.json
 *secrets*.json
 *token*.json
+*service_account*.json
+
+*.log
