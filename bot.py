@@ -1,3 +1,4 @@
+#!/usr/arcadia_tweet_bot/venv/bin/python4.11
 # ---------------------
 # Arcadia Twitter Bot
 #
@@ -13,6 +14,7 @@ import tweepy
 import requests
 import xml.etree.ElementTree as ET
 import isodate
+from datetime import datetime, timezone
 
 # Twitter API credentials
 from twitter_creds import *
@@ -20,21 +22,40 @@ from twitter_creds import *
 # Arcadia members info
 from arcadia_members import ARCADIA_MEMBERS
 
+DIR_PATH = os.getcwd()
+
+# Token Test
+TOKEN_TEST = True
+
 # YouTube API setup
 SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
-SECRETS_FILE = "secrets.json"
-TOKEN_FILE = "token.json"
+SECRETS_FILE = os.path.join(DIR_PATH, "secrets.json")
+TOKEN_FILE = os.path.join(DIR_PATH, "token.json")
 
 # Cached latest videos
-LATEST_VIDEOS_FILE = "latest_videos.json"
+LATEST_VIDEOS_FILE = os.path.join(DIR_PATH, "latest_videos.json")
 
 # Ignore short for twitter
 SHOULD_EXCLUDE_SHORTS = True
 
 # If tweets should be posted
 SHOULD_POST_TWEET = False
+
+# Logfile
+LOG_FILE = os.path.join(DIR_PATH, datetime.now().strftime("%Y-%m-%d")+".log")
+
+# Writes to log file
+def append_log(text):
+    with open(LOG_FILE, 'a') as log_file:
+        log_file.write(f"{text}\n")
+
+# Write creds to file
+def write_creds(creds, file_name = TOKEN_FILE):
+    with open(file_name, 'w') as token_file:
+        token_file.write(creds.to_json())
+        append_log("Wrote creds to token file")
 
 # Authenticates YouTube and returns an api object
 def authenticate_youtube():
@@ -64,7 +85,7 @@ def get_video(api, video_id):
         part ="snippet,contentDetails,statistics",
         id=video_id
     )
-    print(f"Calling videos.list for {video_id}")
+    append_log(f"Calling videos.list for {video_id}")
     return request.execute()
 
 # Loads the latest videos members have posted from the saved video file into memory
@@ -99,20 +120,23 @@ def post_tweet(client, video_title, video_id, member_twitter_handle=None):
     if SHOULD_POST_TWEET:
         try:
             client.create_tweet(text=tweet_text)
-            print(f"Sent Tweet: \"{tweet_text}\"")
+            append_log(f"Sent Tweet: \"{tweet_text}\"")
             return True
         except:
+            append_log(f"Failed to send tweet: \"{tweet_text}\"")
             return False
     else:
-        print(f"Demo Tweet: \"{tweet_text}\"")
+        append_log(f"Demo Tweet: \"{tweet_text}\"")
         return True
 
 def main():
+    append_log("Running bot: " + datetime.now(timezone.utc).strftime("%H:%M"))
+
     latest_vids = load_latest_videos()
     twitter_client = create_twitter_client()
     if SHOULD_EXCLUDE_SHORTS: youtube_api = authenticate_youtube()
 
-    print(f"Polling for new videos...")
+    append_log(f"Polling for new videos...")
     # Check members for new videos
     for arcadia_member in ARCADIA_MEMBERS:
         channel_id = arcadia_member[0]
@@ -133,7 +157,7 @@ def main():
             if channel_id in latest_vids and latest_vids[channel_id] == video_id: break
 
             # This is a flag 1) to make it easier to turn off but 2) because this hits the youtube api through oauth whereas the xml request does not
-            if SHOULD_EXCLUDE_SHORTS & youtube_api:
+            if SHOULD_EXCLUDE_SHORTS and youtube_api:
                 # No way to query if a video is a short so we have to just guess it's a short if it's less than 60s. Which is probably true for our content anyways
                 video = get_video(youtube_api, video_id)
                 duration_iso = video['items'][0]['contentDetails']['duration']
@@ -156,11 +180,11 @@ def main():
             first_video_entry = entries[0].find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
             latest_vids[channel_id] = first_video_entry
 
-    print(f"Polling Ended")
+    append_log(f"Polling Ended")
     # Write the latest videos to a file for reading in later
     with (open(LATEST_VIDEOS_FILE, 'w') as videos_file):
         json.dump(latest_vids, videos_file)
-        print(f"{LATEST_VIDEOS_FILE} written")
+        append_log(f"{LATEST_VIDEOS_FILE} written")
 
 if __name__ == "__main__":
     main()
