@@ -6,24 +6,28 @@
 # ---------------------
 import os
 import json
+import httpx
 from google.oauth2 import service_account
 import googleapiclient.discovery
 import tweepy
+from atproto import Client, client_utils, IdResolver, models
 import requests
 import xml.etree.ElementTree as ET
 import isodate
 from datetime import datetime, timezone
+from enum import Enum
 
 # Twitter API credentials
-from twitter_creds import *
+from social_secrets import *
 
 # Arcadia members info
 from arcadia_members import ARCADIA_MEMBERS
 
-DIR_PATH = os.getcwd()
+class Platforms(Enum):
+    Twitter = 'twitter'
+    BlueSky = 'bsky'
 
-# Token Test
-TOKEN_TEST = True
+DIR_PATH = os.getcwd()
 
 # YouTube API setup
 SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
@@ -34,14 +38,18 @@ SERVICE_ACCOUNT_FILE = os.path.join(DIR_PATH, "service_account.json")
 # Cached latest videos
 LATEST_VIDEOS_FILE = os.path.join(DIR_PATH, "latest_videos.json")
 
+# Cached DIDs of members for bsky
+DID_FILE = os.path.join(DIR_PATH, "did_cache.json")
+
 # Ignore short for twitter
 SHOULD_EXCLUDE_SHORTS = True
 
-# If tweets should be posted
+# If posts should be posted
 SHOULD_POST_TWEET = False
+SHOULD_POST_BSKY = False
 
 # Logfile
-LOG_FILE = os.path.join(DIR_PATH, datetime.now().strftime("%Y-%m-%d")+".log")
+LOG_FILE = os.path.join(DIR_PATH, "logs", datetime.now().strftime("%Y-%m-%d")+".log")
 
 # Writes to log file
 def append_log(text):
@@ -71,12 +79,23 @@ def load_latest_videos():
     latest_vids = {}
 
     if os.path.exists(LATEST_VIDEOS_FILE):
-        with (open(LATEST_VIDEOS_FILE, 'r') as videos_file):
+        with(open(LATEST_VIDEOS_FILE, 'r') as videos_file):
             try:
                 latest_vids = json.load(videos_file)
             except: pass
 
     return latest_vids
+
+def load_dids():
+    dids = {}
+
+    if os.path.exists(DID_FILE):
+        with(open(DID_FILE, 'r') as did_file):
+            try:
+                dids = json.load(did_file)
+            except: pass
+
+    return dids
 
 # Creates an Oauth1 twitter client
 def create_twitter_client():
@@ -88,30 +107,100 @@ def create_twitter_client():
     )
     return client
 
-# Posts a tweet given a video title, links to the video, and tags the member on twitter
-def post_tweet(client, video_title, video_id, member_twitter_handle=None):
-    tweet_text = f"{video_title} https://www.youtube.com/watch?v={video_id}"
+# This client does not yet support access token authentication
+def create_bsky_client():
+    client = Client()
+    try:
+        client.login(BLUESKY_USERNAME, BLUESKY_PASSWORD)
+    except:
+        pass
+    return client
 
-    ## Only tag the member if the twitter handle is not empty
-    if member_twitter_handle: tweet_text += f" @{member_twitter_handle}"
+# Create text for a post given video title, links to the video, and tags the member on twitter
+def create_post_contents(platform: Platforms, video_data, member_handle: str = ""):
+    text = video_data["title"]
+    video_link = f"https://www.youtube.com/watch?v={video_data['id']}"
 
+    if platform == Platforms.Twitter:
+        text += f" {video_link}"
+        if member_handle:
+            text += f" @{member_handle}"
+    elif platform == Platforms.BlueSky:
+        text = client_utils.TextBuilder().text(f"{text}")
+        if member_handle:
+            # First check if we have the did cached
+            dids = load_dids()
+            if member_handle in dids:
+                did = dids[member_handle]
+            else:
+                resolver = IdResolver()
+                did = resolver.handle.resolve(member_handle)
+
+                if did:
+                    dids[member_handle] = did
+
+                    # Write the newly acquired did to the cache file so we don't have to fetch it again.
+                    with (open(DID_FILE, 'w') as did_file):
+                        json.dump(dids, did_file)
+            if did:
+                text.text(" ").mention(f"@{member_handle}", did)
+
+    return text
+
+def post_tweet(client, video_data, member_handle):
+    # Make the text for the tweet
+    text = create_post_contents(Platforms.Twitter, video_data, member_handle)
     if SHOULD_POST_TWEET:
         try:
-            client.create_tweet(text=tweet_text)
-            append_log(f"Sent Tweet: \"{tweet_text}\"")
+            client.create_tweet(text)
+            append_log(f"Sent Tweet: \"{text}\"")
             return True
         except:
-            append_log(f"Failed to send tweet: \"{tweet_text}\"")
+            append_log(f"Failed to send tweet: \"{text}\"")
             return False
     else:
-        append_log(f"Demo Tweet: \"{tweet_text}\"")
-        return True
+        append_log(f"Demo Tweet: \"{text}\"")
+        return False
+
+def post_bsky(client, video_data, member_handle):
+    # Make the text for the tweet
+    text = create_post_contents(Platforms.BlueSky, video_data, member_handle)
+    if SHOULD_POST_BSKY:
+        try:
+            # We have to manually embed the video cause BlueSky is dumb and doesn't do it on their end.
+            thumb_data = httpx.get(video_data['thumbnail']).content
+            thumb_blob = client.upload_blob(thumb_data).blob
+            video_embed = models.AppBskyEmbedExternal.Main(
+                external=models.AppBskyEmbedExternal.External(
+                    title=video_data["title"],
+                    description=video_data["description"],
+                    uri=f"https://www.youtube.com/watch?v={video_data['id']}",
+                    thumb=thumb_blob
+                )
+            )
+
+            client.send_post(text, embed=video_embed)
+            append_log(f"Sent Bsky: \"{text.build_text()}\"")
+            return True
+        except:
+            append_log(f"Failed to send bsky: \"{text.build_text()}\"")
+            return False
+    else:
+        append_log(f"Demo Bsky: \"{text.build_text()}\"")
+        return False
+
+def do_post(platform: Platforms, client, video_data, member_handle):
+    if platform == Platforms.Twitter:
+        return post_tweet(client, video_data, member_handle)
+    elif platform == Platforms.BlueSky:
+        return post_bsky(client, video_data, member_handle)
 
 def main():
     append_log("Running bot: " + datetime.now(timezone.utc).strftime("%H:%M"))
 
     latest_vids = load_latest_videos()
     twitter_client = create_twitter_client()
+    bsky_client = create_bsky_client()
     if SHOULD_EXCLUDE_SHORTS: youtube_api = authenticate_youtube()
 
     append_log(f"Polling for new videos...")
@@ -130,9 +219,35 @@ def main():
 
         for entry in entries:
             video_id = entry.find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
+            socials = [
+                {
+                    "platform": Platforms.Twitter,
+                    "member_handle": arcadia_member[1],
+                    "client": twitter_client
+                },
+                {
+                    "platform": Platforms.BlueSky,
+                    "member_handle": arcadia_member[2],
+                    "client": bsky_client
+                }
+            ]
 
-            # Only post tweet if it's a new video we don't know about
-            if channel_id in latest_vids and latest_vids[channel_id] == video_id: break
+            # list of socials to post to
+            socials_to_post = []
+
+            # Make sure we haven't seen this video on at least one of the social platforms
+            if channel_id in latest_vids:
+                latest = latest_vids[channel_id]
+                for social in socials:
+                    platform = social['platform'].value
+                    if platform not in latest or latest[platform] != video_id:
+                        socials_to_post.append(social)
+            else:
+                latest_vids[channel_id] = {}
+                socials_to_post = list(socials)
+
+            if not socials_to_post:
+                break
 
             # This is a flag 1) to make it easier to turn off but 2) because this hits the youtube api through oauth whereas the xml request does not
             if SHOULD_EXCLUDE_SHORTS and youtube_api:
@@ -144,11 +259,22 @@ def main():
                 if duration_seconds <= 60: continue
 
             video_title = entry.find(".//{http://www.w3.org/2005/Atom}title").text
-            # Send tweet
-            success = post_tweet(twitter_client, video_title, video_id, arcadia_member[1])
+            video_thumbnail = entry.find(".//{http://search.yahoo.com/mrss/}thumbnail").attrib.get('url')
+            video_description = entry.find(".//{http://search.yahoo.com/mrss/}description").text
+            # Do social posts
+            video_data = {
+                "title": video_title,
+                "id": video_id,
+                "thumbnail": video_thumbnail,
+                "description": video_description
+            }
 
-            # Only update list if the twitter post succeeds
-            if success: latest_vids[channel_id] = video_id
+            for social in socials_to_post:
+                # post to social
+                success = do_post(social['platform'], social['client'], video_data, social['member_handle'])
+                # Only update list if the twitter post succeeds
+                if success:
+                    latest_vids[channel_id][social['platform'].value] = video_id
 
             break
 

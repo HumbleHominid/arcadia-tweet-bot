@@ -1,6 +1,6 @@
 # Arcadia Tweet Bot
 
-A social media client that posts the most recent upload from ArcadiaSMP members to Twitter.
+A social media client that posts the most recent upload from ArcadiaSMP members to Twitter and BlueSky
 
 ## Installation
 
