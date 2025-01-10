@@ -10,7 +10,8 @@ import httpx
 from google.oauth2 import service_account
 import googleapiclient.discovery
 import tweepy
-from atproto import Client, client_utils, IdResolver, models
+import atproto
+from atproto import client_utils, IdResolver, models
 import requests
 import xml.etree.ElementTree as ET
 import isodate
@@ -50,6 +51,29 @@ SHOULD_POST_BSKY = False
 
 # Logfile
 LOG_FILE = os.path.join(DIR_PATH, "logs", datetime.now().strftime("%Y-%m-%d")+".log")
+
+class ClientCache:
+    twitter_client = None
+    bsky_client = None
+
+    def get_twitter(self):
+        if not self.twitter_client:
+            append_log("Creating Twitter Client")
+            self.twitter_client = tweepy.Client(consumer_key=CONSUMER_KEY, consumer_secret=CONSUMER_KEY_SECRET, access_token=ACCESS_TOKEN, access_token_secret=ACCESS_TOKEN_SECRET)
+        return self.twitter_client
+
+    def get_bsky(self):
+        if not self.bsky_client:
+            client = atproto.Client()
+            try:
+                client.login(BLUESKY_USERNAME, BLUESKY_PASSWORD)
+                self.bsky_client = client
+            except Exception as e:
+                append_log(e)
+
+        return self.bsky_client
+
+CLIENT_CACHE = ClientCache()
 
 # Writes to log file
 def append_log(text):
@@ -97,34 +121,15 @@ def load_dids():
 
     return dids
 
-# Creates an Oauth1 twitter client
-def create_twitter_client():
-    client = tweepy.Client(
-        consumer_key=TWITTER_API_KEY,
-        consumer_secret=TWITTER_API_SECRET_KEY,
-        access_token=TWITTER_ACCESS_TOKEN,
-        access_token_secret=TWITTER_ACCESS_TOKEN_SECRET
-    )
-    return client
-
-# This client does not yet support access token authentication
-def create_bsky_client():
-    client = Client()
-    try:
-        client.login(BLUESKY_USERNAME, BLUESKY_PASSWORD)
-    except:
-        pass
-    return client
-
 # Create text for a post given video title, links to the video, and tags the member on twitter
 def create_post_contents(platform: Platforms, video_data, member_handle: str = ""):
     text = video_data["title"]
     video_link = f"https://www.youtube.com/watch?v={video_data['id']}"
 
     if platform == Platforms.Twitter:
-        text += f" {video_link}"
         if member_handle:
-            text += f" @{member_handle}"
+            text += f" - @{member_handle}"
+        text += f" {video_link}"
     elif platform == Platforms.BlueSky:
         text = client_utils.TextBuilder().text(f"{text}")
         if member_handle:
@@ -147,25 +152,27 @@ def create_post_contents(platform: Platforms, video_data, member_handle: str = "
 
     return text
 
-def post_tweet(client, video_data, member_handle):
+def post_tweet(video_data, member_handle):
     # Make the text for the tweet
     text = create_post_contents(Platforms.Twitter, video_data, member_handle)
     if SHOULD_POST_TWEET:
+        client = CLIENT_CACHE.get_twitter()
         try:
-            client.create_tweet(text)
+            client.create_tweet(text=text)
             append_log(f"Sent Tweet: \"{text}\"")
             return True
-        except:
+        except Exception as e:
             append_log(f"Failed to send tweet: \"{text}\"")
             return False
     else:
         append_log(f"Demo Tweet: \"{text}\"")
         return False
 
-def post_bsky(client, video_data, member_handle):
+def post_bsky(video_data, member_handle):
     # Make the text for the tweet
     text = create_post_contents(Platforms.BlueSky, video_data, member_handle)
     if SHOULD_POST_BSKY:
+        client = CLIENT_CACHE.get_bsky()
         try:
             # We have to manually embed the video cause BlueSky is dumb and doesn't do it on their end.
             thumb_data = httpx.get(video_data['thumbnail']).content
@@ -179,7 +186,7 @@ def post_bsky(client, video_data, member_handle):
                 )
             )
 
-            client.send_post(text, embed=video_embed)
+            client.send_post(text=text, embed=video_embed)
             append_log(f"Sent Bsky: \"{text.build_text()}\"")
             return True
         except:
@@ -189,18 +196,16 @@ def post_bsky(client, video_data, member_handle):
         append_log(f"Demo Bsky: \"{text.build_text()}\"")
         return False
 
-def do_post(platform: Platforms, client, video_data, member_handle):
+def do_post(platform: Platforms, video_data, member_handle):
     if platform == Platforms.Twitter:
-        return post_tweet(client, video_data, member_handle)
+        return post_tweet(video_data, member_handle)
     elif platform == Platforms.BlueSky:
-        return post_bsky(client, video_data, member_handle)
+        return post_bsky(video_data, member_handle)
 
 def main():
     append_log("Running bot: " + datetime.now(timezone.utc).strftime("%H:%M"))
 
     latest_vids = load_latest_videos()
-    twitter_client = create_twitter_client()
-    bsky_client = create_bsky_client()
     if SHOULD_EXCLUDE_SHORTS: youtube_api = authenticate_youtube()
 
     append_log(f"Polling for new videos...")
@@ -223,12 +228,10 @@ def main():
                 {
                     "platform": Platforms.Twitter,
                     "member_handle": arcadia_member[1],
-                    "client": twitter_client
                 },
                 {
                     "platform": Platforms.BlueSky,
                     "member_handle": arcadia_member[2],
-                    "client": bsky_client
                 }
             ]
 
@@ -271,7 +274,7 @@ def main():
 
             for social in socials_to_post:
                 # post to social
-                success = do_post(social['platform'], social['client'], video_data, social['member_handle'])
+                success = do_post(social['platform'], video_data, social['member_handle'])
                 # Only update list if the twitter post succeeds
                 if success:
                     latest_vids[channel_id][social['platform'].value] = video_id
