@@ -45,6 +45,9 @@ DID_FILE = os.path.join(DIR_PATH, "did_cache.json")
 # Ignore short for twitter
 SHOULD_EXCLUDE_SHORTS = True
 
+# If we should ignore videos that aren't tagged as arcadia videos
+EXCLUDE_NON_ARCADIA_VIDEOS = False
+
 # If posts should be posted
 SHOULD_POST_TWEET = False
 SHOULD_POST_BSKY = False
@@ -77,7 +80,7 @@ CLIENT_CACHE = ClientCache()
 
 # Writes to log file
 def append_log(text):
-    with open(LOG_FILE, 'a') as log_file:
+    with open(LOG_FILE, 'a', encoding="utf-8") as log_file:
         log_file.write(f"{text}\n")
 
 # Authenticates YouTube and returns an api object
@@ -92,7 +95,7 @@ def authenticate_youtube():
 # Gets the latest video for a specific channel
 def get_video(api, video_id):
     request = api.videos().list(
-        part ="snippet,contentDetails,statistics",
+        part ="snippet,contentDetails",
         id=video_id
     )
     append_log(f"Calling videos.list for {video_id}")
@@ -166,7 +169,7 @@ def post_tweet(video_data, member_handle):
             return False
     else:
         append_log(f"Demo Tweet: \"{text}\"")
-        return False
+        return True
 
 def post_bsky(video_data, member_handle):
     # Make the text for the tweet
@@ -194,7 +197,7 @@ def post_bsky(video_data, member_handle):
             return False
     else:
         append_log(f"Demo Bsky: \"{text.build_text()}\"")
-        return False
+        return True
 
 def do_post(platform: Platforms, video_data, member_handle):
     if platform == Platforms.Twitter:
@@ -202,16 +205,36 @@ def do_post(platform: Platforms, video_data, member_handle):
     elif platform == Platforms.BlueSky:
         return post_bsky(video_data, member_handle)
 
+def is_arcadia_video(video):
+    snippet = video['items'][0]['snippet']
+    if 'tags' not in snippet:
+        return False
+    for tag in snippet['tags']:
+        if 'arcadia' in tag.lower():
+            return True
+    return False
+
+def is_yt_short(video):
+    # No way to query if a video is a short so we have to just guess it's a short if it's less than 60s. Which is probably true for our content anyways
+    duration_iso = video['items'][0]['contentDetails']['duration']
+    duration_seconds = isodate.parse_duration(duration_iso).seconds
+
+    return duration_seconds <= 60
+
 def main():
     append_log("Running bot: " + datetime.now(timezone.utc).strftime("%H:%M"))
 
     latest_vids = load_latest_videos()
-    if SHOULD_EXCLUDE_SHORTS: youtube_api = authenticate_youtube()
+    youtube_api = authenticate_youtube()
+    if not youtube_api:
+        append_log(f"ERROR: YouTube API failed to initialize")
+        return
 
     append_log(f"Polling for new videos...")
     # Check members for new videos
     for arcadia_member in ARCADIA_MEMBERS:
         channel_id = arcadia_member[0]
+        append_log(f'Polling member: {channel_id}')
 
         # Request the xml for a channel. Only grabs the 10 most recent but they are ordered so it's perfect
         request = requests.get(f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")
@@ -221,45 +244,24 @@ def main():
         # This response is XML so we gotta to annoying things
         root = ET.fromstring(request.text)
         entries = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+        # The most recent video
+        latest_video_entry = entries[0].find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
 
         for entry in entries:
             video_id = entry.find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
-            socials = [
-                {
-                    "platform": Platforms.Twitter,
-                    "member_handle": arcadia_member[1],
-                },
-                {
-                    "platform": Platforms.BlueSky,
-                    "member_handle": arcadia_member[2],
-                }
-            ]
-
-            # list of socials to post to
-            socials_to_post = []
-
-            # Make sure we haven't seen this video on at least one of the social platforms
-            if channel_id in latest_vids:
-                latest = latest_vids[channel_id]
-                for social in socials:
-                    platform = social['platform'].value
-                    if platform not in latest or latest[platform] != video_id:
-                        socials_to_post.append(social)
-            else:
-                latest_vids[channel_id] = {}
-                socials_to_post = list(socials)
-
-            if not socials_to_post:
+            # If we have gotten through the list and found the latest video again, early out
+            if channel_id in latest_vids and latest_vids[channel_id] == video_id:
+                # Update the latest video to the head of the list because there is no latest video from arcadia
+                latest_vids[channel_id] = latest_video_entry
                 break
 
-            # This is a flag 1) to make it easier to turn off but 2) because this hits the youtube api through oauth whereas the xml request does not
-            if SHOULD_EXCLUDE_SHORTS and youtube_api:
-                # No way to query if a video is a short so we have to just guess it's a short if it's less than 60s. Which is probably true for our content anyways
-                video = get_video(youtube_api, video_id)
-                duration_iso = video['items'][0]['contentDetails']['duration']
-                duration_seconds = isodate.parse_duration(duration_iso).seconds
-
-                if duration_seconds <= 60: continue
+            video = get_video(youtube_api, video_id)
+            # Don't post shorts to the socials
+            if SHOULD_EXCLUDE_SHORTS and is_yt_short(video):
+                continue
+            # Don't consider non-arcadia videos
+            if EXCLUDE_NON_ARCADIA_VIDEOS and not is_arcadia_video(video):
+                continue
 
             video_title = entry.find(".//{http://www.w3.org/2005/Atom}title").text
             video_thumbnail = entry.find(".//{http://search.yahoo.com/mrss/}thumbnail").attrib.get('url')
@@ -271,19 +273,28 @@ def main():
                 "thumbnail": video_thumbnail,
                 "description": video_description
             }
-
-            for social in socials_to_post:
+            socials = [
+                {
+                    "platform": Platforms.Twitter,
+                    "member_handle": arcadia_member[1],
+                },
+                {
+                    "platform": Platforms.BlueSky,
+                    "member_handle": arcadia_member[2],
+                }
+            ]
+            for social in socials:
                 # post to social
                 success = do_post(social['platform'], video_data, social['member_handle'])
-                # Only update list if the twitter post succeeds
+                # Only update list if the social post succeeds
+                # NOTE: This updates the latest vid if ANY social post succeeds instead of ALL, this is intended behavior.
                 if success:
-                    latest_vids[channel_id][social['platform'].value] = video_id
+                    latest_vids[channel_id] = video_id
 
             break
 
         # if we get through all the entries either the whole list is shorts, or the final video is the most recent one. we can just update to the most recent one to avoid further api requests
-        last_video_entry = entries[-1].find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
-        if not channel_id in latest_vids or latest_vids[channel_id] == last_video_entry:
+        if not channel_id in latest_vids:
             first_video_entry = entries[0].find(".//{http://www.youtube.com/xml/schemas/2015}videoId").text
             latest_vids[channel_id] = first_video_entry
 
